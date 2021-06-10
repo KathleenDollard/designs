@@ -83,14 +83,14 @@ like. The design section can establish an execution order.
 -->
 
 1. The new bootstrap experience (this includes source generators and analyzers) must come inbox with the Windows Desktop SDK, and be available without any additional references or NuGet packages from get go (i.e. `dotnet new winforms && dotnet build`).<br/>Related: [dotnet/designs#181](https://github.com/dotnet/designs/pull/181)
-1. The new bootstrap API must only work for Windows applications projects (i.e. `OutputType = WinExe`). These projects have an entry point, where an app is initialised; and they also specify an application manifest, if there is one.
 
-    Property | TFM | Visible
-    --|--|--
-    `ApplicationVisualStyles` | .NET Framework 2.0+<br/> .NET Core 3.x<br/>.NET 5.0+ |   yes<br/>yes<br/>yes
-    `ApplicationUseCompatibleTextRendering` | .NET Framework 2.0+<br/> .NET Core 3.x<br/>.NET 5.0+ | yes<br/>yes<br/>yes
-    `ApplicationHighDpiMode` | .NET Framework 2.0+<br/> .NET Core 3.x<br/>.NET 5.0+ | no<br/>yes<br/>yes
-    `ApplicationFont*` | .NET Framework 2.0+<br/> .NET Core 3.x/.NET 5.0<br/>.NET 6.0+ | no<br/>no<br/>yes
+2. The shared configuration must be stored in a way that is easily accessible to the Widnows Forms Designer and Windows Forms runtime. And this storage mechanism must not have any adverse effect on the perfomance of the Designer, i.e. not require any additional computation, unless absolutely necessary.
+
+3. The shared configuration must work for single project and multi project scenarios, i.e. for scenarios where 
+    - the application entry point (i.e. `Main()`) and all user forms and controls reside in the same project, and
+    - the application entry point (i.e. `Main()`) resides in one project, and user forms and controls either reside in other projects within the solution or referenced via NuGet packages.
+
+3. The configuration defaults must be chosen such that the original code in `Main()` could be replaced with the new bootstrap call, and no further configuration would be required.
 
 3. The Windows Forms application template must be updated with the new bootstrap experiece.
 
@@ -104,6 +104,8 @@ like. The design section can establish an execution order.
     * (Consider) checking for app.config and dpi-related configurations, if found - warn the user, and direct to supply the dpi mode via the MSBuild property defined below.
     * Check if `Application.SetHighDpiMode()` is invoked with anything other than `HighDpiMode.PerMonitorV2` (see: [dotnet/winforms-designer#3278](https://github.com/dotnet/winforms-designer/issues/3278))
 
+3. Update the Windows Forms application template using the top level statements syntax.
+
 
 ### Non-Goals
 
@@ -115,7 +117,10 @@ bullets to this section based on early feedback and reviews where requirements
 are brought that you need to scope out.
 -->
 
+1. Provide source generator/analyzer support for apps built on .NET Framework, .NET Core 3.1, or .NET 5.0.
+
 1. Modify the Windows Forms Designer process to read values either from *.myapp file (VB) or MSBuild properties (C#). This work will be tracked in separately, targeting Dev17.
+
 1. Design/implement top level statements fo Windows Forms applications.
 1. Design/implement new host/builder model for Windows Forms applications.
 1. Migrate Visual Basic apps off the Application Framework or change the use of *.myapp file.
@@ -123,7 +128,7 @@ are brought that you need to scope out.
 1. Use Roslyn analyzers in Visual Basic scenarios until previous two items are addressed.
 
 
-:thinking: Strategically it could be benefitial to migrate Visual Basic off the Application Framework and *.myapp file in favour of Roslyn source generators and MSBuild properties. This could also significantly reduce efforts in maintaining Visual Studio property pages for Visual Studio projects (e.g. [dotnet/project-system#7236](https://github.com/dotnet/project-system/issues/7236), [dotnet/project-system#7240](https://github.com/dotnet/project-system/issues/7240), and [dotnet/project-system#7241](https://github.com/dotnet/project-system/issues/7241))
+:thinking: In the future releases of .NET (e.g. 7.0+) we will consider how to migrate Visual Basic off the Application Framework and *.myapp file in favour of Roslyn source generators and MSBuild properties. This could also significantly reduce efforts in maintaining Visual Studio property pages for Visual Basic projects (e.g. [dotnet/project-system#7236](https://github.com/dotnet/project-system/issues/7236), [dotnet/project-system#7240](https://github.com/dotnet/project-system/issues/7240), and [dotnet/project-system#7241](https://github.com/dotnet/project-system/issues/7241))
 
 
 
@@ -180,6 +185,9 @@ The designer surface process should have no issues reading configuration values 
 
 ### 2. C#
 
+
+#### Affected API
+
 ```diff
     static class Program
     {
@@ -189,16 +197,18 @@ The designer surface process should have no issues reading configuration values 
 +           ApplicationConfiguration.Initialize();
 
 -           Application.EnableVisualStyles();
+-           Application.SetCompatibleTextRenderingDefault(false);
 -           Application.SetDefaultFont(new Font(....));
 -           Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
--           Application.SetCompatibleTextRenderingDefault(false);
 
             Application.Run(new MainForm());
        }
     }
 ```
 
-New MSBuild properties:
+#### MSBuild properties
+
+New properties:
 
 ```diff
 // proj
@@ -206,11 +216,42 @@ New MSBuild properties:
   <PropertyGroup>
      <ApplicationIcon />
      <ApplicationManifest>app1.manifest</ApplicationManifest>
-+    <ApplicationVisualStyles>[true|false, default=true]</ApplicationVisualStyles>
-+    <ApplicationUseCompatibleTextRendering>[true|false, default=false]</ApplicationUseCompatibleTextRendering>
-+    <ApplicationFont>[equivalent to Font.ToString(), string, default='', i.e. Control.DefaultFont]</ApplicationFontName>
+
++    <!--
++       Purpose: controls whether to emit: Application.EnableVisualStyles();
++       Default=true
++       Empty value=true
++     -->
++    <ApplicationVisualStyles>[true|false]</ApplicationVisualStyles>
+
++    <!--
++       Purpose: the value in: Application.SetCompatibleTextRenderingDefault(...);
++       Default=false
++       Empty value=false
++     -->
++    <ApplicationUseCompatibleTextRendering>[true|false]</ApplicationUseCompatibleTextRendering>
+
++    <!--
++       Purpose: contains a custom font information; controls whether to emit: Application.SetDefaultFont(new Font(....));
++       Default=''
++       Empty value='', implies Control.DefaultFont
++     -->
++    <ApplicationFont>[equivalent to Font.ToString()]</ApplicationFontName>
+
++    <!--
++       Purpose: contains a name of a resource that contains a custom font information
++       Default=''
++       Empty value=''
++       Can't be used in conjuction with 'ApplicationFont' property
++     -->
 +    <ApplicationFontResx>[name of resource that hold an equivalent to Font.ToString(), string, default='']</ApplicationFontSize>
-+    <ApplicationHighDpiMode>[dpi mode, string/HighDpiMode enum value, default=PerMonitorV2]</ApplicationHighDpiMode>
+
++    <!--
++       Purpose: the value in: Application.SetHighDpiMode(...);
++       Default=PerMonitorV2
++       Empty value=PerMonitorV2
++     -->
++    <ApplicationHighDpiMode>[string/HighDpiMode enum value]</ApplicationHighDpiMode>
   </PropertyGroup>
 ```
 
@@ -225,29 +266,120 @@ Existing properties of interest:
   </PropertyGroup>
 ```
 
-Unlike Visual Basic projects C# projects require a little more work. There are several candidates for storing settings, such as an MSBuild project file (e.g. csproj/props/targets/etc.), an app.config or some external configuration file.
+### Implementation details
 
-After deliberations and discussions we propose the settings to be stored as MSBuild properties for the following reasons:
-- The designer surface process fun in Visual Studio should have no issues reading MSBuild properties.
-- Unlike schema-enforced app.config, MSBuild properties are stored in an untyped propertybag.
-- app.configs don't appear to be used in .NET apps.
-- Whilst developers who build their apps on .NET Framework 4.7+ maybe familiar with [app.config ApplicationConfigurationSection](https://docs.microsoft.com/dotnet/framework/configure-apps/file-schema/winforms/windows-forms-add-configuration-element) and/or [app.config AppContextSwitchOverrides](https://docs.microsoft.com/dotnet/framework/configure-apps/file-schema/runtime/appcontextswitchoverrides-element), we have removed all dependencies on app.config and these quirks in .NET Core 3.0 timeframe.
-  > :thought_balloon:  It is also worth noting that quirks were necessary in .NET Framework, which was installed in-place, and didn't provided any kind of side-by-side deployment. In a rare and unfortunate event where we may accidentally break end users experiences in a given release users will be able to install a previous working .NET release and run their application against it until a fix becomes available.
-- There may also be an argument that app.config can be changed by end users, thus allowing to alter behaviours of applications without a recompilation, making the app.config the prefered configuration vehicle. But it is important to note that our SDK is built with developers in mind, and not the ability of end users to alter the application behaviours at will. If an app developer feels it is important to allow end users to change the default font or dpi settings via an app.config it is the developers responsibility to facilitate that mechanism to end users.
+1. The new bootstrap API must only work for Windows applications projects (i.e. `OutputType = WinExe` and [`OutputType = Exe`](https://docs.microsoft.com/dotnet/core/compatibility/sdk/5.0/automatically-infer-winexe-output-type)) because:
+    - These projects have an entry point, where an app is initialised; and
+    - they also specify an application manifest, if there is one.
 
-
-
-The runtime portion will leverage Roslyn source generators to read MSBuild configurations, and emit code for the necessary API, e.g. call `Application.SetHighDpiMode(HighDpiMode.PerMonitorV2)` and `Application.SetDefaultFont("Arial", 14f)`.<br/>
+    During compilation Roslyn source generators will read supplied configurations, and emit code for the necessary API, e.g.<br/>
 :warning: The screenshot is dated, provided for concept demonstration purposes only:
 ![image](https://user-images.githubusercontent.com/4403806/114354384-8488b300-9bb1-11eb-855a-b58e80953793.png)
 
-We will be able to leverage the power of Roslyn analyzers to warn developers about duplicate/redundant API invocations performed outside the generated code, unnecessary DPI settings, and generally steer them towards the new bootstrap experience.
 
+
+2. There are multiple possible places for storing values that must be accessible to the Designer, and the Designer must be able to read these values quickly and efficiently. The contenders are:
+
+    <table>
+      <tr>
+        <th width="15%"></th>
+        <th width="40%"><center>Pros</center></th>
+        <th width="40%"><center>Cons</center></th>
+      </tr>
+      <tr>
+        <td>Csproj/props (vbproj in the long run)</td>
+        <td>
+          <ul>
+            <li>Easy to add/modify</li>
+            <li>Accessible to all projects in the solution (multi project scenario)</li>
+            <li>Can be overriden at a project level (multi project scenario)</li>
+            <li>Easy to expose in the Visual Studio project settings UI</li>
+          </ul>
+        </td>
+        <td>
+          <ul>
+            <li><i>"After all we’ve done to clean up project files, it feels like a regression to add properties that don’t need to be there. MSBuild files are already hard enough for many users to understand, and we won’t be helping by putting values there that doesn’t really make sense to be there."</i></li>
+          </ul>
+        </td>
+      </tr>
+      <tr>
+        <td>Code (presumably in WinExe) as a known to the designer method (akin to <code>InitializeComponent()</code>) or attributes</td>
+        <td>
+          <ul>
+            <li>Generally familiar model to C# devs</li>
+          </ul>
+        </td>
+        <td>
+          <ul>
+            <li>Won't work in multi project scenarios</li>
+            <li>Likely have an adverse effect on the designer start up - the designer needs to load and parse the method/attributes data</li>
+            <li>Very difficult to expose in the Visual Studio project settings UI</li>
+          </ul>
+        </td>
+      </tr>
+      <tr>
+        <td>app.json/project.json/app.config/etc.</td>
+        <td>
+          <ul>
+            <li>Easy to add/modify</li>
+            <li>Not "polluting" csproj/props with unrelated properties</li>
+          </ul>
+        </td>
+        <td>
+          <ul>
+            <li>It is an anti-pattern, we shouldn't inventing new files because we don’t want to clutter the project files.</li>
+            <li>Configs may not be accessible to all projects in the solution (multi project scenario)</li>
+            <li>app.config don't appear to be used in .NET, and our templates no longer carry one</li>
+            <li>May be difficult to expose in the Visual Studio project settings UI</li>
+          </ul>
+        </td>
+      </tr>
+      <tr>
+        <td>.editorconfig</td>
+        <td>
+          <ul>
+            <li>Easy to add/modify</li>
+            <li>Accessible to all projects in the solution (multi project scenario)</li>
+            <li>There is  an existing Visual Studio UI</li>
+          </ul>
+        </td>
+        <td>
+          <ul>
+            <li>The proposed configuration is not a style configuration, nor exclusive to design-time (for WinExe, though is for control libraries)</li>
+          </ul>
+        </td>
+      </tr>
+    </table>
+
+    After a number of discussions, it was concluded that MSBuild properties (i.e. csproj/props) is the best mechanism for storing settings. The concerns with polutting project files can be addressed with sensible defaults, that is a "zero configuration" must work for the main stream scenarios, and ultimately produce the same code being replaced:
+
+    ```diff
+        static class Program
+        {
+            [STAThread]
+            static void Main()
+            {
+    +           ApplicationConfiguration.Initialize();
+
+    -           Application.EnableVisualStyles();                       // ApplicationVisualStyles='' or true
+    -           Application.SetCompatibleTextRenderingDefault(false);   // ApplicationUseCompatibleTextRendering='' or false
+    -           Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);   // ApplicationHighDpiMode='' or PerMonitorV2
+
+    -           Application.SetDefaultFont(new Font(....));             // New in .NET 6.0 Preview5
+    -                                                                   //    ApplicationFont='' -> Control.DefaultFont
+    -                                                                   //    ApplicationFontResx=''
+
+                Application.Run(new MainForm());
+           }
+        }
+    ```
+
+3. We will be able to leverage the power of Roslyn analyzers to warn developers about duplicate/redundant API invocations performed outside the generated code, unnecessary DPI settings in the app.manifest (inspecting `ApplicationManifest` property), and generally steer them towards the new bootstrap experience.
 
 
 ### 3. Visual Studio
 
-To complete the user experience we can update the Visual Studio property page for Windows Forms projects, and provide an Application Framework-esque (yet arguably more refined) experience to C# developers. It can looks something like this mockup:
+To complete the user experience we can update the Visual Studio property page for C# Windows Forms projects, and provide an Application Framework-esque (yet arguably more refined) experience to C# developers. It can looks something like this mockup:
 
 ![image](https://user-images.githubusercontent.com/4403806/119922957-2e7e9c00-bfb4-11eb-8086-c002c2315c58.png)
 
@@ -267,6 +399,21 @@ When you find yourself having to explain something in a GitHub discussion or in
 email, consider to update your proposal and link to your answer instead. This
 way, you avoid having to explain the same thing over and over again.
 -->
+
+### Why store settings as MSBuild properties (e.g. in csproj or props files)?
+
+
+After deliberations and discussions we propose the settings to be stored as MSBuild properties for the following reasons:
+
+- The designer surface process fun in Visual Studio should have no issues reading MSBuild properties.
+- Unlike schema-enforced app.config, MSBuild properties are stored in an untyped propertybag.
+- app.configs don't appear to be used in .NET apps.
+- Whilst developers who build their apps on .NET Framework 4.7+ maybe familiar with [app.config ApplicationConfigurationSection](https://docs.microsoft.com/dotnet/framework/configure-apps/file-schema/winforms/windows-forms-add-configuration-element) and/or [app.config AppContextSwitchOverrides](https://docs.microsoft.com/dotnet/framework/configure-apps/file-schema/runtime/appcontextswitchoverrides-element), we have removed all dependencies on app.config and these quirks in .NET Core 3.0 timeframe.
+  > :thought_balloon:  It is also worth noting that quirks were necessary in .NET Framework, which was installed in-place, and didn't provided any kind of side-by-side deployment. In a rare and unfortunate event where we may accidentally break end users experiences in a given release users will be able to install a previous working .NET release and run their application against it until a fix becomes available.
+- There may also be an argument that app.config can be changed by end users, thus allowing to alter behaviours of applications without a recompilation, making the app.config the prefered configuration vehicle. But it is important to note that our SDK is built with developers in mind, and not the ability of end users to alter the application behaviours at will. If an app developer feels it is important to allow end users to change the default font or dpi settings via an app.config it is the developers responsibility to facilitate that mechanism to end users.
+
+Other storage mechanisms were also considered:
+
 
 ### Font Configuration
 
@@ -317,23 +464,26 @@ This proposal introduces a 4th way of configuring dpi, and to make it successful
 
 The benefit the new approach provides is by facilitating the sharing of the information between the runtime and the designer during the development phase, as well as unifying how dpi settings are configured. This benefit is believed to outweigh the need to remove several lines of code from `Main()` method and adding several MSBuild properties.
 
-### Go further?
+### What about top level programs and host/builder model?
 
-At this point an astute reader may ask why no go further and offer an API similar to a ASP.<!-- -->NET Core bootstrap? Wouldn't it be nice to write something like:
+Generally speaking, this proposal is orthogonal to top level programs. Windows Forms applications can already be written as top level programs today, e.g.:
 ```cs
-[STAThread]
-static void Main()
-{
-    Application
-        .Configure(() =>
-        {
-            // application configuration logic
-        })
-        .Run(new Form1());
-}
-```
+using System.Drawing;
+using System.Threading;
+using System.Windows.Forms;
+using ProjectConfiguration;
 
-Indeed, this sounds like a grand idea. However in reality Windows Forms app often have elaborate application bootstrap logic (e.g. [this](https://github.com/gitextensions/gitextensions/blob/master/GitExtensions/Program.cs), [this](https://github.com/luisolivos/Halconet/blob/4ed328a15ba69aab00e92076774977143790b5d3/HalcoNET%205.8.0/Ventas/Program.cs), or [this](https://github.com/aaraujo2019/PEQMIMERIA/blob/e11b6d57e3bbbe505834cbfeb717fe87066d6850/DBMETAL_SHARP/DBMETAL_SHARP/Program.cs)) that won't be possible in this scenario, and will require deeper investigations and feasibility studies.
+// Apartment must be set to Unknown first.
+Thread.CurrentThread.SetApartmentState(ApartmentState.Unknown);
+Thread.CurrentThread.SetApartmentState(ApartmentState.STA);
+
+Application.EnableVisualStyles();
+Application.SetCompatibleTextRenderingDefault(defaultValue: false);
+Application.SetDefaultFont(new Font(new FontFamily("Arial"), 12f));
+Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+
+Application.Run(new Form1());
+```
 
 In the long term we could consider supporting a host/builder model, similar to the suggestion in [dotnet/winforms#2861](https://github.com/dotnet/winforms/issues/2861) and implementation in [alex-oswald/WindowsFormsLifetime](https://github.com/alex-oswald/WindowsFormsLifetime). E.g.:
 ```cs
@@ -355,6 +505,9 @@ public static IHostBuilder CreateHostBuilder() =>
             // ...
         });
 ```
+
+However we need to be congnisant of the fact that Windows Forms apps often have elaborate application bootstrap logic (e.g. [this](https://github.com/gitextensions/gitextensions/blob/master/GitExtensions/Program.cs), [this](https://github.com/luisolivos/Halconet/blob/4ed328a15ba69aab00e92076774977143790b5d3/HalcoNET%205.8.0/Ventas/Program.cs), or [this](https://github.com/aaraujo2019/PEQMIMERIA/blob/e11b6d57e3bbbe505834cbfeb717fe87066d6850/DBMETAL_SHARP/DBMETAL_SHARP/Program.cs)) that could be difficult to translate or adapt to this syntax, so this direction will require deeper investigations and feasibility studies.
+
 
 
 ### Does this approach align/conflict with other UI SDKs, e.g. WPF or WinUI?
